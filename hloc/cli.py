@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 from pathlib import Path
+from typing import Any, Dict, List, Tuple
 
 import pycolmap
 
@@ -20,7 +21,8 @@ MAPPER_TYPES = ("incremental", "global")
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Run a basic HLOC mapping pipeline on a folder of images."
+        description="Run a basic HLOC mapping pipeline on a folder of images.",
+        allow_abbrev=False,
     )
     parser.add_argument("image_dir", type=Path)
     parser.add_argument("out_dir", type=Path)
@@ -61,7 +63,194 @@ def parse_args():
         help="Best-effort resume: reuse existing intermediate files when present.",
     )
     parser.add_argument("--verbose", action="store_true")
-    return parser.parse_args()
+    args, extra_args = parser.parse_known_args()
+    return args, extra_args
+
+
+def parse_scalar(value: str):
+    lowered = value.lower()
+    if lowered in {"true", "false"}:
+        return lowered == "true"
+    try:
+        return int(value)
+    except ValueError:
+        pass
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    return value
+
+
+def set_nested_option(options: Dict[str, Any], path: List[str], value: Any):
+    target = options
+    for key in path[:-1]:
+        target = target.setdefault(key, {})
+    target[path[-1]] = value
+
+
+def merge_nested_options(target: Dict[str, Any], source: Dict[str, Any]):
+    for key, value in source.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            merge_nested_options(target[key], value)
+        else:
+            target[key] = value
+
+
+def convert_colmap_global_mapper_option(flag: str, value: Any) -> Tuple[List[str], Any]:
+    if not flag.startswith("GlobalMapper."):
+        raise ValueError(f"Unsupported COLMAP flag `{flag}`.")
+    name = flag.split(".", 1)[1]
+
+    direct_mapper_options = {
+        "min_num_matches",
+        "ignore_watermarks",
+        "num_threads",
+        "random_seed",
+        "decompose_relative_pose",
+        "ba_num_iterations",
+        "skip_rotation_averaging",
+        "skip_track_establishment",
+        "skip_global_positioning",
+        "skip_bundle_adjustment",
+        "skip_retriangulation",
+        "track_intra_image_consistency_threshold",
+        "track_required_tracks_per_view",
+        "track_min_num_views_per_track",
+        "max_angular_reproj_error_deg",
+        "max_normalized_reproj_error",
+        "min_tri_angle_deg",
+        "ba_skip_fixed_rotation_stage",
+        "ba_skip_joint_optimization_stage",
+    }
+    if name in direct_mapper_options:
+        return ["mapper", name], value
+
+    if name.startswith("gp_"):
+        mapped = {
+            "gp_use_gpu": "use_gpu",
+            "gp_gpu_index": "gpu_index",
+            "gp_optimize_positions": "optimize_positions",
+            "gp_optimize_points": "optimize_points",
+            "gp_optimize_scales": "optimize_scales",
+            "gp_loss_function_scale": "loss_function_scale",
+        }
+        if name == "gp_max_num_iterations":
+            if hasattr(pycolmap.GlobalPositionerOptions(), "max_num_iterations"):
+                return ["mapper", "global_positioning", "max_num_iterations"], value
+            raise ValueError(
+                f"Unsupported COLMAP GlobalMapper flag `{flag}` for this pycolmap build."
+            )
+        mapped = mapped.get(name)
+        if mapped is None:
+            raise ValueError(
+                f"Unsupported COLMAP GlobalMapper flag `{flag}` for this pycolmap build."
+            )
+        return ["mapper", "global_positioning", mapped], value
+
+    if name.startswith("ba_ceres_"):
+        mapped = {
+            "ba_ceres_use_gpu": ("use_gpu",),
+            "ba_ceres_gpu_index": ("gpu_index",),
+            "ba_ceres_loss_function_scale": ("loss_function_scale",),
+            "ba_ceres_max_num_iterations": ("solver_options", "max_num_iterations"),
+        }.get(name)
+        if mapped is None:
+            raise ValueError(
+                f"Unsupported COLMAP GlobalMapper flag `{flag}` for this pycolmap build."
+            )
+        return ["mapper", "bundle_adjustment", "ceres", *mapped], value
+
+    if name.startswith("ba_"):
+        mapped = {
+            "ba_refine_focal_length": "refine_focal_length",
+            "ba_refine_principal_point": "refine_principal_point",
+            "ba_refine_extra_params": "refine_extra_params",
+            "ba_refine_sensor_from_rig": "refine_sensor_from_rig",
+            "ba_refine_rig_from_world": "refine_rig_from_world",
+            "ba_refine_points3D": "refine_points3D",
+            "ba_min_track_length": "min_track_length",
+        }.get(name)
+        if mapped is None:
+            raise ValueError(
+                f"Unsupported COLMAP GlobalMapper flag `{flag}` for this pycolmap build."
+            )
+        return ["mapper", "bundle_adjustment", mapped], value
+
+    if name.startswith("tri_"):
+        mapped = {
+            "tri_complete_max_reproj_error": "complete_max_reproj_error",
+            "tri_merge_max_reproj_error": "merge_max_reproj_error",
+            "tri_min_angle": "min_angle",
+        }.get(name)
+        if mapped is None:
+            raise ValueError(
+                f"Unsupported COLMAP GlobalMapper flag `{flag}` for this pycolmap build."
+            )
+        return ["mapper", "retriangulation", mapped], value
+
+    if name.startswith("ra_"):
+        mapped = {
+            "ra_max_rotation_error_deg": "max_rotation_error_deg",
+        }.get(name)
+        if mapped is None:
+            raise ValueError(
+                f"Unsupported COLMAP GlobalMapper flag `{flag}` for this pycolmap build."
+            )
+        return ["mapper", "rotation_averaging", mapped], value
+
+    raise ValueError(f"Unsupported COLMAP flag `{flag}`.")
+
+
+def parse_extra_args(extra_args: List[str], mapper_type: str):
+    mapper_options: Dict[str, Any] = {}
+    verbose_level = 2
+
+    i = 0
+    while i < len(extra_args):
+        arg = extra_args[i]
+        if arg == "--v":
+            if i + 1 >= len(extra_args):
+                raise ValueError("Expected a value after `--v`.")
+            verbose_level = int(extra_args[i + 1])
+            i += 2
+            continue
+        if not arg.startswith("--"):
+            raise ValueError(f"Unexpected argument `{arg}`.")
+        if i + 1 >= len(extra_args):
+            raise ValueError(f"Expected a value after `{arg}`.")
+
+        flag = arg[2:]
+        value = parse_scalar(extra_args[i + 1])
+        if mapper_type != "global":
+            raise ValueError(
+                f"COLMAP-style mapper flags are only supported with the global mapper, got `{arg}`."
+            )
+        path, mapped_value = convert_colmap_global_mapper_option(flag, value)
+        set_nested_option(mapper_options, path, mapped_value)
+        i += 2
+
+    return mapper_options, verbose_level
+
+
+def default_mapper_options(mapper_type: str):
+    if mapper_type != "global":
+        return None
+
+    options: Dict[str, Any] = {
+        "mapper": {
+            "bundle_adjustment": {
+                "ceres": {
+                    "solver_options": {
+                        "max_num_iterations": 100,
+                    }
+                }
+            }
+        }
+    }
+    if hasattr(pycolmap.GlobalPositionerOptions(), "max_num_iterations"):
+        options["mapper"]["global_positioning"] = {"max_num_iterations": 50}
+    return options
 
 
 def get_image_list(image_dir: Path):
@@ -77,7 +266,14 @@ def get_image_list(image_dir: Path):
 
 
 def main():
-    args = parse_args()
+    args, extra_args = parse_args()
+    mapper_options = default_mapper_options(args.mapper_type) or {}
+    extra_mapper_options, verbose_level = parse_extra_args(extra_args, args.mapper_type)
+    merge_nested_options(mapper_options, extra_mapper_options)
+    if args.verbose:
+        pycolmap.logging.verbose_level = max(pycolmap.logging.verbose_level, 2)
+    if extra_args:
+        pycolmap.logging.verbose_level = max(pycolmap.logging.verbose_level, verbose_level)
 
     image_dir = args.image_dir
     out_dir = args.out_dir
@@ -166,6 +362,7 @@ def main():
         matches=matches,
         camera_mode=camera_mode,
         image_options=image_options,
+        mapper_options=mapper_options or None,
         mapper_type=args.mapper_type,
         verbose=args.verbose,
     )
