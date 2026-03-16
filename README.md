@@ -208,6 +208,14 @@ reconstruction.main(..., mapper_options=dict(ba_refine_focal_length=False, ba_re
 python -m hloc.reconstruction [...] --mapper_options ba_refine_focal_length=False ba_refine_extra_params=False
 ```
 
+To run global SfM through `pycolmap` instead of the default incremental mapper, select the global mapper explicitly. This requires `pycolmap>=4.0.0`:
+```python
+reconstruction.main(..., mapper_type="global")
+```
+```bash
+python -m hloc.reconstruction [...] --mapper_type global
+```
+
 </details>
 
 ## Versions
