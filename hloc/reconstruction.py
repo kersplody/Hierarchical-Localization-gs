@@ -159,6 +159,7 @@ def run_reconstruction(
     options: Optional[Dict[str, Any]] = None,
     mapper_type: MapperType = "incremental",
     model_dir: Optional[Path] = None,
+    skip_view_graph_calibration: bool = False,
 ) -> pycolmap.Reconstruction:
     models_path = sfm_dir / "models"
     models_path.mkdir(exist_ok=True, parents=True)
@@ -174,7 +175,10 @@ def run_reconstruction(
             )
         elif mapper_type == "global":
             check_global_mapper_support()
-            calibrate_view_graph(database_path)
+            if skip_view_graph_calibration:
+                logger.info("Skipping view graph calibration before global reconstruction.")
+            else:
+                calibrate_view_graph(database_path)
             reconstructions = global_mapping(
                 database_path, image_dir, models_path, options=options
             )
@@ -242,6 +246,7 @@ def main(
     mapper_options: Optional[Dict[str, Any]] = None,
     mapper_type: MapperType = "incremental",
     model_dir: Optional[Path] = None,
+    skip_view_graph_calibration: bool = False,
 ) -> pycolmap.Reconstruction:
     assert features.exists(), features
     assert pairs.exists(), pairs
@@ -279,6 +284,7 @@ def main(
         mapper_options,
         mapper_type=mapper_type,
         model_dir=model_dir,
+        skip_view_graph_calibration=skip_view_graph_calibration,
     )
     if reconstruction is not None:
         logger.info(
@@ -304,6 +310,11 @@ if __name__ == "__main__":
         choices=list(pycolmap.CameraMode.__members__.keys()),
     )
     parser.add_argument("--skip_geometric_verification", action="store_true")
+    parser.add_argument(
+        "--skip_view_graph_calibration",
+        action="store_true",
+        help="Skip calibrate_view_graph() before running the global mapper.",
+    )
     parser.add_argument("--min_match_score", type=float)
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument(

@@ -105,6 +105,11 @@ def parse_args():
         default=None,
         help="pycolmap log verbosity level.",
     )
+    parser.add_argument(
+        "--skip_view_graph_calibration",
+        action="store_true",
+        help="Skip calibrate_view_graph() before running the global mapper.",
+    )
     parser.add_argument("--verbose", action="store_true")
     args, extra_args = parser.parse_known_args()
     return args, extra_args
@@ -395,6 +400,7 @@ def main():
         mapper_options=mapper_options or None,
         mapper_type=args.mapper_type,
         model_dir=output_path,
+        skip_view_graph_calibration=args.skip_view_graph_calibration,
         verbose=args.verbose,
     )
 
