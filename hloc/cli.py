@@ -97,6 +97,14 @@ def parse_args():
         action="store_true",
         help="Best-effort resume: reuse existing intermediate files when present.",
     )
+    parser.add_argument(
+        "--log_level",
+        "--log-level",
+        dest="log_level",
+        type=int,
+        default=None,
+        help="pycolmap log verbosity level.",
+    )
     parser.add_argument("--verbose", action="store_true")
     args, extra_args = parser.parse_known_args()
     return args, extra_args
@@ -193,17 +201,10 @@ def convert_colmap_global_mapper_option(flag: str, value: Any) -> Tuple[List[str
 
 def parse_extra_args(extra_args: List[str], mapper_type: str):
     mapper_options: Dict[str, Any] = {}
-    verbose_level = 2
 
     i = 0
     while i < len(extra_args):
         arg = extra_args[i]
-        if arg == "--v":
-            if i + 1 >= len(extra_args):
-                raise ValueError("Expected a value after `--v`.")
-            verbose_level = int(extra_args[i + 1])
-            i += 2
-            continue
         if not arg.startswith("--"):
             raise ValueError(f"Unexpected argument `{arg}`.")
         if i + 1 >= len(extra_args):
@@ -219,7 +220,7 @@ def parse_extra_args(extra_args: List[str], mapper_type: str):
         set_nested_option(mapper_options, path, mapped_value)
         i += 2
 
-    return mapper_options, verbose_level
+    return mapper_options
 
 
 def parse_mapper_option_entry(entry: str, mapper_type: str) -> Dict[str, Any]:
@@ -295,12 +296,12 @@ def main():
             mapper_options,
             parse_mapper_option_entry(entry, args.mapper_type),
         )
-    extra_mapper_options, verbose_level = parse_extra_args(extra_args, args.mapper_type)
+    extra_mapper_options = parse_extra_args(extra_args, args.mapper_type)
     merge_nested_options(mapper_options, extra_mapper_options)
     if args.verbose:
         pycolmap.logging.verbose_level = max(pycolmap.logging.verbose_level, 2)
-    if extra_args:
-        pycolmap.logging.verbose_level = max(pycolmap.logging.verbose_level, verbose_level)
+    if args.log_level is not None:
+        pycolmap.logging.verbose_level = max(pycolmap.logging.verbose_level, args.log_level)
 
     image_dir = args.image_path
     database_path = args.database_path
