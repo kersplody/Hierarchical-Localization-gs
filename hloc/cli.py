@@ -162,79 +162,33 @@ def convert_colmap_global_mapper_option(flag: str, value: Any) -> Tuple[List[str
         return ["mapper", name], value
 
     if name.startswith("gp_"):
-        mapped = {
-            "gp_use_gpu": "use_gpu",
-            "gp_gpu_index": "gpu_index",
-            "gp_optimize_positions": "optimize_positions",
-            "gp_optimize_points": "optimize_points",
-            "gp_optimize_scales": "optimize_scales",
-            "gp_loss_function_scale": "loss_function_scale",
-        }
         if name == "gp_max_num_iterations":
             if hasattr(pycolmap.GlobalPositionerOptions(), "max_num_iterations"):
                 return ["mapper", "global_positioning", "max_num_iterations"], value
-            raise ValueError(
-                f"Unsupported COLMAP GlobalMapper flag `{flag}` for this pycolmap build."
-            )
-        mapped = mapped.get(name)
-        if mapped is None:
-            raise ValueError(
-                f"Unsupported COLMAP GlobalMapper flag `{flag}` for this pycolmap build."
-            )
-        return ["mapper", "global_positioning", mapped], value
+        return ["mapper", "global_positioning", name[3:]], value
 
     if name.startswith("ba_ceres_"):
-        mapped = {
-            "ba_ceres_use_gpu": ("use_gpu",),
-            "ba_ceres_gpu_index": ("gpu_index",),
-            "ba_ceres_loss_function_scale": ("loss_function_scale",),
-            "ba_ceres_max_num_iterations": ("solver_options", "max_num_iterations"),
-        }.get(name)
-        if mapped is None:
-            raise ValueError(
-                f"Unsupported COLMAP GlobalMapper flag `{flag}` for this pycolmap build."
-            )
-        return ["mapper", "bundle_adjustment", "ceres", *mapped], value
+        suffix = name[len("ba_ceres_") :]
+        if suffix == "max_num_iterations":
+            return [
+                "mapper",
+                "bundle_adjustment",
+                "ceres",
+                "solver_options",
+                "max_num_iterations",
+            ], value
+        return ["mapper", "bundle_adjustment", "ceres", suffix], value
 
     if name.startswith("ba_"):
-        mapped = {
-            "ba_refine_focal_length": "refine_focal_length",
-            "ba_refine_principal_point": "refine_principal_point",
-            "ba_refine_extra_params": "refine_extra_params",
-            "ba_refine_sensor_from_rig": "refine_sensor_from_rig",
-            "ba_refine_rig_from_world": "refine_rig_from_world",
-            "ba_refine_points3D": "refine_points3D",
-            "ba_min_track_length": "min_track_length",
-        }.get(name)
-        if mapped is None:
-            raise ValueError(
-                f"Unsupported COLMAP GlobalMapper flag `{flag}` for this pycolmap build."
-            )
-        return ["mapper", "bundle_adjustment", mapped], value
+        return ["mapper", "bundle_adjustment", name[3:]], value
 
     if name.startswith("tri_"):
-        mapped = {
-            "tri_complete_max_reproj_error": "complete_max_reproj_error",
-            "tri_merge_max_reproj_error": "merge_max_reproj_error",
-            "tri_min_angle": "min_angle",
-        }.get(name)
-        if mapped is None:
-            raise ValueError(
-                f"Unsupported COLMAP GlobalMapper flag `{flag}` for this pycolmap build."
-            )
-        return ["mapper", "retriangulation", mapped], value
+        return ["mapper", "retriangulation", name[4:]], value
 
     if name.startswith("ra_"):
-        mapped = {
-            "ra_max_rotation_error_deg": "max_rotation_error_deg",
-        }.get(name)
-        if mapped is None:
-            raise ValueError(
-                f"Unsupported COLMAP GlobalMapper flag `{flag}` for this pycolmap build."
-            )
-        return ["mapper", "rotation_averaging", mapped], value
+        return ["mapper", "rotation_averaging", name[3:]], value
 
-    raise ValueError(f"Unsupported COLMAP flag `{flag}`.")
+    return ["mapper", name], value
 
 
 def parse_extra_args(extra_args: List[str], mapper_type: str):
