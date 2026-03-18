@@ -138,6 +138,19 @@ def global_mapping(
     )
 
 
+def calibrate_view_graph(database_path: Path):
+    if not hasattr(pycolmap, "calibrate_view_graph"):
+        logger.warning(
+            "The installed pycolmap build does not support calibrate_view_graph(); "
+            "continuing without view graph calibration."
+        )
+        return
+
+    logger.info("Calibrating the view graph before global reconstruction...")
+    if not pycolmap.calibrate_view_graph(database_path):
+        logger.warning("View graph calibration did not succeed; continuing anyway.")
+
+
 def run_reconstruction(
     sfm_dir: Path,
     database_path: Path,
@@ -161,6 +174,7 @@ def run_reconstruction(
             )
         elif mapper_type == "global":
             check_global_mapper_support()
+            calibrate_view_graph(database_path)
             reconstructions = global_mapping(
                 database_path, image_dir, models_path, options=options
             )
@@ -257,10 +271,6 @@ def main(
         )
     if not skip_geometric_verification:
         estimation_and_geometric_verification(database, pairs, verbose)
-    if mapper_type == "global":
-        logger.info("Calibrating the view graph before global reconstruction...")
-        if not pycolmap.calibrate_view_graph(database):
-            logger.warning("View graph calibration did not succeed; continuing anyway.")
     reconstruction = run_reconstruction(
         sfm_dir,
         database,
