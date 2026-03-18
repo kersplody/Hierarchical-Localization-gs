@@ -20,6 +20,13 @@ from .triangulation import (
 
 MapperType = Literal["incremental", "global"]
 GLOBAL_MAPPER_MIN_VERSION = version.parse("4.0.0")
+MODEL_FILENAMES = (
+    "images.bin",
+    "cameras.bin",
+    "points3D.bin",
+    "frames.bin",
+    "rigs.bin",
+)
 
 
 def get_incremental_options():
@@ -138,6 +145,7 @@ def run_reconstruction(
     verbose: bool = False,
     options: Optional[Dict[str, Any]] = None,
     mapper_type: MapperType = "incremental",
+    model_dir: Optional[Path] = None,
 ) -> pycolmap.Reconstruction:
     models_path = sfm_dir / "models"
     models_path.mkdir(exist_ok=True, parents=True)
@@ -176,16 +184,31 @@ def run_reconstruction(
         f"Largest model is #{largest_index} " f"with {largest_num_images} images."
     )
 
-    for filename in [
-        "images.bin",
-        "cameras.bin",
-        "points3D.bin",
-        "frames.bin",
-        "rigs.bin",
-    ]:
-        if (sfm_dir / filename).exists():
-            (sfm_dir / filename).unlink()
-        shutil.move(str(models_path / str(largest_index) / filename), str(sfm_dir))
+    if model_dir is None:
+        for filename in MODEL_FILENAMES:
+            source = models_path / str(largest_index) / filename
+            target = sfm_dir / filename
+            if target.exists():
+                target.unlink()
+            if source.exists():
+                shutil.move(str(source), str(target))
+    else:
+        model_indices = {str(index) for index in reconstructions}
+        model_dir.mkdir(parents=True, exist_ok=True)
+        for child in model_dir.iterdir():
+            if child.is_dir() and child.name.isdigit() and child.name not in model_indices:
+                shutil.rmtree(child)
+
+        for index in sorted(reconstructions):
+            source_dir = models_path / str(index)
+            target_dir = model_dir / str(index)
+            if target_dir.exists():
+                shutil.rmtree(target_dir)
+            target_dir.mkdir(parents=True, exist_ok=True)
+            for filename in MODEL_FILENAMES:
+                source = source_dir / filename
+                if source.exists():
+                    shutil.move(str(source), str(target_dir / filename))
     return reconstructions[largest_index]
 
 
@@ -195,6 +218,7 @@ def main(
     pairs: Path,
     features: Path,
     matches: Path,
+    database_path: Optional[Path] = None,
     camera_mode: pycolmap.CameraMode = pycolmap.CameraMode.AUTO,
     verbose: bool = False,
     skip_geometric_verification: bool = False,
@@ -203,13 +227,15 @@ def main(
     image_options: Optional[Dict[str, Any]] = None,
     mapper_options: Optional[Dict[str, Any]] = None,
     mapper_type: MapperType = "incremental",
+    model_dir: Optional[Path] = None,
 ) -> pycolmap.Reconstruction:
     assert features.exists(), features
     assert pairs.exists(), pairs
     assert matches.exists(), matches
 
     sfm_dir.mkdir(parents=True, exist_ok=True)
-    database = sfm_dir / "database.db"
+    database = database_path or (sfm_dir / "database.db")
+    database.parent.mkdir(parents=True, exist_ok=True)
     if mapper_type == "global":
         check_global_mapper_support()
 
@@ -242,6 +268,7 @@ def main(
         verbose,
         mapper_options,
         mapper_type=mapper_type,
+        model_dir=model_dir,
     )
     if reconstruction is not None:
         logger.info(

@@ -24,8 +24,30 @@ def parse_args():
         description="Run a basic HLOC mapping pipeline on a folder of images.",
         allow_abbrev=False,
     )
-    parser.add_argument("image_dir", type=Path)
-    parser.add_argument("out_dir", type=Path)
+    parser.add_argument(
+        "--image-path",
+        "--image_path",
+        dest="image_path",
+        type=Path,
+        required=True,
+        help="Directory containing the input images.",
+    )
+    parser.add_argument(
+        "--database-path",
+        "--database_path",
+        dest="database_path",
+        type=Path,
+        required=True,
+        help="Path to the COLMAP database file. Its parent directory stores HLOC intermediate files.",
+    )
+    parser.add_argument(
+        "--output-path",
+        "--output_path",
+        dest="output_path",
+        type=Path,
+        required=True,
+        help="Directory where reconstructed COLMAP models are exported as numbered subdirectories.",
+    )
     parser.add_argument(
         "--matching_method",
         choices=PAIRING_METHODS,
@@ -52,6 +74,19 @@ def parse_args():
         choices=MAPPER_TYPES,
         default="global",
         help="COLMAP SfM backend to use during reconstruction.",
+    )
+    parser.add_argument(
+        "--mapper-option",
+        "--mapper_option",
+        dest="mapper_options_raw",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help=(
+            "Set nested mapper options as key=value. For global mapping, prefer "
+            "paths like mapper.min_num_matches=15 or "
+            "mapper.bundle_adjustment.ceres.solver_options.max_num_iterations=200."
+        ),
     )
     parser.add_argument("--num_matched", type=int, default=50)
     parser.add_argument("--camera_model", default="OPENCV")
@@ -233,6 +268,39 @@ def parse_extra_args(extra_args: List[str], mapper_type: str):
     return mapper_options, verbose_level
 
 
+def parse_mapper_option_entry(entry: str, mapper_type: str) -> Dict[str, Any]:
+    idx = entry.find("=")
+    if idx == -1:
+        raise ValueError(
+            f"Invalid --mapper-option `{entry}`. Expected KEY=VALUE."
+        )
+
+    key = entry[:idx]
+    value = parse_scalar(entry[idx + 1 :])
+
+    if not key:
+        raise ValueError(f"Invalid --mapper-option `{entry}`. Empty option key.")
+
+    if mapper_type == "global" and key.startswith("GlobalMapper."):
+        path, mapped_value = convert_colmap_global_mapper_option(key, value)
+    else:
+        path = key.split(".")
+        if any(not part for part in path):
+            raise ValueError(
+                f"Invalid --mapper-option `{entry}`. Empty path component in `{key}`."
+            )
+        if mapper_type == "global" and path[0] != "mapper":
+            raise ValueError(
+                "Global mapper options passed via --mapper-option must start with "
+                "`mapper.` to match the pycolmap option tree."
+            )
+        mapped_value = value
+
+    options: Dict[str, Any] = {}
+    set_nested_option(options, path, mapped_value)
+    return options
+
+
 def default_mapper_options(mapper_type: str):
     if mapper_type != "global":
         return None
@@ -268,6 +336,11 @@ def get_image_list(image_dir: Path):
 def main():
     args, extra_args = parse_args()
     mapper_options = default_mapper_options(args.mapper_type) or {}
+    for entry in args.mapper_options_raw:
+        merge_nested_options(
+            mapper_options,
+            parse_mapper_option_entry(entry, args.mapper_type),
+        )
     extra_mapper_options, verbose_level = parse_extra_args(extra_args, args.mapper_type)
     merge_nested_options(mapper_options, extra_mapper_options)
     if args.verbose:
@@ -275,27 +348,28 @@ def main():
     if extra_args:
         pycolmap.logging.verbose_level = max(pycolmap.logging.verbose_level, verbose_level)
 
-    image_dir = args.image_dir
-    out_dir = args.out_dir
-    out_dir.mkdir(parents=True, exist_ok=True)
+    image_dir = args.image_path
+    database_path = args.database_path
+    output_path = args.output_path
+    work_dir = database_path.parent
+    work_dir.mkdir(parents=True, exist_ok=True)
+    output_path.mkdir(parents=True, exist_ok=True)
 
     references = get_image_list(image_dir)
 
     feature_conf = extract_features.confs[args.feature_type]
     matcher_conf = match_features.confs[args.matcher_type]
 
-    features = out_dir / f"{feature_conf['output']}.h5"
-    matches = out_dir / f"{matcher_conf['output']}.h5"
-    sfm_pairs = out_dir / (
+    features = work_dir / f"{feature_conf['output']}.h5"
+    matches = work_dir / f"{matcher_conf['output']}.h5"
+    sfm_pairs = work_dir / (
         "pairs-exhaustive.txt"
         if args.matching_method == "exhaustive"
         else "pairs-retrieval.txt"
     )
-    sfm_dir = out_dir / "sfm"
-    sfm_outputs = (
-        sfm_dir / "images.bin",
-        sfm_dir / "cameras.bin",
-        sfm_dir / "points3D.bin",
+    sfm_dir = work_dir / "sfm"
+    has_existing_models = any(
+        path.is_dir() and path.name.isdigit() for path in output_path.iterdir()
     )
 
     if args.resume and features.exists():
@@ -314,14 +388,14 @@ def main():
         pairs_from_exhaustive.main(sfm_pairs, image_list=references)
     else:
         retrieval_conf = extract_features.confs["netvlad"]
-        retrieval_path = out_dir / f"{retrieval_conf['output']}.h5"
+        retrieval_path = work_dir / f"{retrieval_conf['output']}.h5"
         if args.resume and retrieval_path.exists():
             logger.info("Reusing existing retrieval descriptors at %s.", retrieval_path)
         else:
             retrieval_path = extract_features.main(
                 retrieval_conf,
                 image_dir,
-                export_dir=out_dir,
+                export_dir=work_dir,
                 image_list=references,
             )
         num_matched = min(len(references), args.num_matched)
@@ -350,8 +424,8 @@ def main():
         else pycolmap.CameraMode.PER_IMAGE
     )
 
-    if args.resume and all(path.exists() for path in sfm_outputs):
-        logger.info("Reusing existing SfM model at %s.", sfm_dir)
+    if args.resume and has_existing_models:
+        logger.info("Reusing existing exported model(s) at %s.", output_path)
         return
 
     reconstruction.main(
@@ -360,10 +434,12 @@ def main():
         pairs=sfm_pairs,
         features=features,
         matches=matches,
+        database_path=database_path,
         camera_mode=camera_mode,
         image_options=image_options,
         mapper_options=mapper_options or None,
         mapper_type=args.mapper_type,
+        model_dir=output_path,
         verbose=args.verbose,
     )
 
