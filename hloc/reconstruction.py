@@ -1,6 +1,10 @@
 import argparse
+import os
 import multiprocessing
 import shutil
+import sys
+import threading
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
@@ -27,6 +31,60 @@ MODEL_FILENAMES = (
     "frames.bin",
     "rigs.bin",
 )
+
+
+class StderrTee:
+    def __init__(self, path: Path, mirror_stdout: bool = False):
+        self.path = path
+        self.mirror_stdout = mirror_stdout
+        self._orig_fd: Optional[int] = None
+        self._file_fd: Optional[int] = None
+        self._pipe_read_fd: Optional[int] = None
+        self._thread: Optional[threading.Thread] = None
+
+    def _forward(self):
+        assert self._pipe_read_fd is not None
+        assert self._orig_fd is not None
+        assert self._file_fd is not None
+        try:
+            while True:
+                chunk = os.read(self._pipe_read_fd, 8192)
+                if not chunk:
+                    break
+                os.write(self._orig_fd, chunk)
+                if self.mirror_stdout:
+                    os.write(1, chunk)
+                os.write(self._file_fd, chunk)
+        finally:
+            os.close(self._pipe_read_fd)
+            self._pipe_read_fd = None
+
+    def __enter__(self):
+        sys.stderr.flush()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._orig_fd = os.dup(2)
+        self._file_fd = os.open(
+            self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644
+        )
+        self._pipe_read_fd, pipe_write_fd = os.pipe()
+        os.dup2(pipe_write_fd, 2)
+        os.close(pipe_write_fd)
+        self._thread = threading.Thread(target=self._forward, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        sys.stderr.flush()
+        assert self._orig_fd is not None
+        assert self._file_fd is not None
+        os.dup2(self._orig_fd, 2)
+        if self._thread is not None:
+            self._thread.join()
+        os.close(self._orig_fd)
+        os.close(self._file_fd)
+        self._orig_fd = None
+        self._file_fd = None
+        self._thread = None
 
 
 def get_incremental_options():
@@ -133,6 +191,7 @@ def global_mapping(
     sfm_path: Path,
     options: Optional[Dict[str, Any]] = None,
 ) -> dict[int, pycolmap.Reconstruction]:
+    logger.info("Starting global mapping...")
     return pycolmap.global_mapping(
         database_path, image_dir, sfm_path, options=options or {}
     )
@@ -156,6 +215,7 @@ def run_reconstruction(
     database_path: Path,
     image_dir: Path,
     verbose: bool = False,
+    log_level: Optional[int] = None,
     options: Optional[Dict[str, Any]] = None,
     mapper_type: MapperType = "incremental",
     model_dir: Optional[Path] = None,
@@ -167,8 +227,16 @@ def run_reconstruction(
     if options is None:
         options = {}
     options = {"num_threads": min(multiprocessing.cpu_count(), 16), **options}
+    stderr_log_path = sfm_dir / "colmap.stderr.log"
+    stderr_context = nullcontext()
+    emit_pycolmap_output = verbose or ((log_level or 0) > 0)
+    if emit_pycolmap_output:
+        logger.info("Mirroring pycolmap stderr output to %s.", stderr_log_path)
+        stderr_context = StderrTee(
+            stderr_log_path, mirror_stdout=((log_level or 0) > 0)
+        )
 
-    with OutputCapture(verbose):
+    with stderr_context, OutputCapture(emit_pycolmap_output):
         if mapper_type == "incremental":
             reconstructions = incremental_mapping(
                 database_path, image_dir, models_path, options=options
@@ -239,6 +307,7 @@ def main(
     database_path: Optional[Path] = None,
     camera_mode: pycolmap.CameraMode = pycolmap.CameraMode.AUTO,
     verbose: bool = False,
+    log_level: Optional[int] = None,
     skip_geometric_verification: bool = False,
     min_match_score: Optional[float] = None,
     image_list: Optional[List[str]] = None,
@@ -281,6 +350,7 @@ def main(
         database,
         image_dir,
         verbose,
+        log_level,
         mapper_options,
         mapper_type=mapper_type,
         model_dir=model_dir,
@@ -315,6 +385,7 @@ if __name__ == "__main__":
         action="store_true",
         help="Skip calibrate_view_graph() before running the global mapper.",
     )
+    parser.add_argument("--log_level", type=int, default=None)
     parser.add_argument("--min_match_score", type=float)
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument(
@@ -345,6 +416,12 @@ if __name__ == "__main__":
     image_options = parse_option_args(
         args.pop("image_options"), pycolmap.ImageReaderOptions()
     )
+    if args.get("verbose"):
+        pycolmap.logging.verbose_level = max(pycolmap.logging.verbose_level, 2)
+    if args.get("log_level") is not None:
+        pycolmap.logging.verbose_level = max(
+            pycolmap.logging.verbose_level, args["log_level"]
+        )
     mapper_type = args.get("mapper_type", "incremental")
     if mapper_type == "global":
         check_global_mapper_support()

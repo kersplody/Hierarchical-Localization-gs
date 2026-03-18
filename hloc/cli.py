@@ -400,6 +400,7 @@ def main():
         mapper_options=mapper_options or None,
         mapper_type=args.mapper_type,
         model_dir=output_path,
+        log_level=args.log_level,
         skip_view_graph_calibration=args.skip_view_graph_calibration,
         verbose=args.verbose,
     )
