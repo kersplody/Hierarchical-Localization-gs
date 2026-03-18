@@ -51,9 +51,10 @@ class StderrTee:
                 chunk = os.read(self._pipe_read_fd, 8192)
                 if not chunk:
                     break
-                os.write(self._orig_fd, chunk)
                 if self.mirror_stdout:
                     os.write(1, chunk)
+                else:
+                    os.write(self._orig_fd, chunk)
                 os.write(self._file_fd, chunk)
         finally:
             os.close(self._pipe_read_fd)

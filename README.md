@@ -2,6 +2,8 @@
 
 This is `hloc`, a modular toolbox for state-of-the-art 6-DoF visual localization. It implements [Hierarchical Localization](https://arxiv.org/abs/1812.03506), leveraging image retrieval and feature matching, and is fast, accurate, and scalable. This codebase combines and makes easily accessible years of research on image matching and Structure-from-Motion.
 
+This fork adds a higher-level `hloc` mapping CLI and extends the reconstruction path with `pycolmap` global mapping controls, including nested mapper options, optional view-graph calibration, and log mirroring for verbose global-mapper output.
+
 With `hloc`, you can:
 
 - Reproduce state-of-the-art results on multiple indoor and outdoor visual localization benchmarks
@@ -66,6 +68,24 @@ Strcture of the toolbox:
 ```bash
 python -m hloc.name_of_script --arg1 --arg2
 ```
+
+This fork also provides a higher-level mapping command:
+```bash
+python -m hloc.cli \
+  --image-path /path/to/images \
+  --database-path /path/to/work/database.db \
+  --output-path /path/to/output-models
+```
+
+The CLI runs feature extraction, pair generation, matching, and reconstruction end-to-end. It defaults to the global mapper and accepts:
+
+- `--mapper-type {incremental,global}` to select the SfM backend
+- `--mapper-option KEY=VALUE` for nested mapper options such as `mapper.min_num_matches=15`
+- COLMAP-style global mapper flags in `--flag value` form, mapped into the `pycolmap` option tree
+- `--skip_view_graph_calibration` to bypass `calibrate_view_graph()` before global mapping
+- `--log-level N` to raise `pycolmap.logging.verbose_level`; when `N > 0`, pycolmap output is mirrored to the console and `colmap.stderr.log`
+
+Intermediate files are stored next to `--database-path`, and reconstructed models are exported into numbered subdirectories under `--output-path`.
 
 ## Tasks
 
@@ -214,6 +234,36 @@ reconstruction.main(..., mapper_type="global")
 ```
 ```bash
 python -m hloc.reconstruction [...] --mapper_type global
+```
+
+This fork also exposes nested global-mapper options through both the Python API and command line. For example:
+```python
+reconstruction.main(
+    ...,
+    mapper_type="global",
+    mapper_options={
+        "mapper": {
+            "min_num_matches": 15,
+            "bundle_adjustment": {
+                "ceres": {"solver_options": {"max_num_iterations": 200}}
+            },
+        }
+    },
+)
+```
+```bash
+python -m hloc.cli [...] \
+  --mapper-type global \
+  --mapper-option mapper.min_num_matches=15 \
+  --mapper-option mapper.bundle_adjustment.ceres.solver_options.max_num_iterations=200
+```
+
+Global mapping in this fork runs `calibrate_view_graph()` immediately before `global_mapping()` by default. To disable it:
+```python
+reconstruction.main(..., mapper_type="global", skip_view_graph_calibration=True)
+```
+```bash
+python -m hloc.cli [...] --mapper-type global --skip_view_graph_calibration
 ```
 
 </details>
